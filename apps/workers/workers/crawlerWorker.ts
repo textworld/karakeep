@@ -544,6 +544,54 @@ async function crawlPage(
       `[Crawler][${jobId}] Successfully navigated to "${targetUrl}". Waiting for the page to load ...`,
     );
 
+    // 模拟滚动以确保动态加载的内容被渲染
+    if (serverConfig.crawler.fullPageScreenshot) {
+      logger.info(
+        `[Crawler][${jobId}] Performing simulated scrolling for full page screenshot.`,
+      );
+
+      try {
+        // 获取页面的总滚动高度
+        const scrollHeight = await page.evaluate(
+          () => document.body.scrollHeight,
+        );
+        logger.info(
+          `[Crawler][${jobId}] Total page scroll height: ${scrollHeight}px`,
+        );
+
+        // 获取视窗高度
+        const viewportHeight = await page.evaluate(() => window.innerHeight);
+        const scrollIncrement = Math.floor(viewportHeight * 0.8); // 每次滚动视窗高度的80%
+
+        // 模拟滚动过程
+        let currentPosition = 0;
+        while (currentPosition < scrollHeight) {
+          // 滚动到新位置
+          await page.evaluate((position) => {
+            window.scrollTo(0, position);
+          }, currentPosition);
+
+          // 等待一小段时间让内容加载
+          await new Promise((resolve) => setTimeout(resolve, 200));
+
+          // 更新当前位置
+          currentPosition += scrollIncrement;
+          logger.debug(
+            `[Crawler][${jobId}] Scrolled to position: ${currentPosition}px`,
+          );
+        }
+
+        // 最后滚动到页面顶部以确保一致的起始状态
+        await page.evaluate(() => window.scrollTo(0, 0));
+        logger.info(`[Crawler][${jobId}] Completed simulated scrolling.`);
+      } catch (error) {
+        logger.warn(
+          `[Crawler][${jobId}] Error during simulated scrolling: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        // 即使滚动失败也继续执行，不中断截图流程
+      }
+    }
+
     // Wait until network is relatively idle or timeout after 5 seconds
     await Promise.race([
       page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => ({})),
