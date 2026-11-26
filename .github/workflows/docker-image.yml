@@ -39,18 +39,42 @@ permissions:
   packages: write
 
 jobs:
+  # Turns the 'arch' input into the build matrix. A job level 'if' can't see
+  # the matrix context, so the matrix has to be built from the input instead
+  # of filtering the matrix afterwards.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      multi: ${{ steps.plan.outputs.multi }}
+    steps:
+      - id: plan
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          set -euo pipefail
+          case "$ARCH" in
+            amd64)
+              echo 'matrix=[{"arch":"amd64","os":"ubuntu-latest"}]' >>"$GITHUB_OUTPUT"
+              echo 'multi=false' >>"$GITHUB_OUTPUT"
+              ;;
+            arm64)
+              echo 'matrix=[{"arch":"arm64","os":"ubuntu-24.04-arm"}]' >>"$GITHUB_OUTPUT"
+              echo 'multi=false' >>"$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo 'matrix=[{"arch":"amd64","os":"ubuntu-latest"},{"arch":"arm64","os":"ubuntu-24.04-arm"}]' >>"$GITHUB_OUTPUT"
+              echo 'multi=true' >>"$GITHUB_OUTPUT"
+              ;;
+          esac
+
   build:
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: amd64
-            os: ubuntu-latest
-          - arch: arm64
-            os: ubuntu-24.04-arm
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    # The 'arch' input can narrow the build down to a single architecture.
-    if: ${{ inputs.arch == 'both' || inputs.arch == matrix.arch }}
     steps:
       - uses: actions/checkout@v4.3.1
         with:
@@ -89,7 +113,7 @@ jobs:
       # With a single architecture there's no manifest to stitch together, so
       # the plain tags are pointed at it directly.
       - name: Point the plain tags at the single architecture
-        if: ${{ inputs.arch != 'both' }}
+        if: ${{ needs.plan.outputs.multi != 'true' }}
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/karakeep
         run: |
@@ -102,9 +126,9 @@ jobs:
             "${IMAGE}:${{ inputs.target }}-${{ matrix.arch }}"
 
   manifest:
-    needs: build
+    needs: [plan, build]
     # Only makes sense when both architectures were built.
-    if: ${{ inputs.arch == 'both' }}
+    if: ${{ needs.plan.outputs.multi == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Set up Docker Buildx
