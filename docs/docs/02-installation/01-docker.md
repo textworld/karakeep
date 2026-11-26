@@ -100,6 +100,8 @@ GHCR_MIRROR=o4toi9ub980mfcs3ru-ghcr.xuanyuan.run
 DOCKERHUB_MIRROR=o4toi9ub980mfcs3ru.xuanyuan.run
 ```
 
+The tag of the app image is set with `KARAKEEP_IMAGE_TAG` (defaults to `latest`). Note that this is not the same variable as the `KARAKEEP_VERSION` of the regular compose file: that one selects the release of the official image (e.g. `release` or `0.35.0`), while this one selects the tag of the image published by this repository.
+
 Everything else (volumes, env vars, service wiring) is identical, so the rest of this guide applies unchanged.
 
 ## Updating
