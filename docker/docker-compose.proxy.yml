@@ -1,0 +1,69 @@
+# A compose file for pulling the images through a registry mirror.
+#
+# The images are pulled from a mirror of ghcr.io and Docker Hub instead of the
+# registries themselves. This is useful in networks where the registries are
+# slow or unreachable (e.g. mainland China).
+#
+# The mirror is configured through two variables, so a different mirror can be
+# used by overriding them in the .env file:
+#
+#   GHCR_MIRROR=o4toi9ub980mfcs3ru-ghcr.xuanyuan.run
+#   DOCKERHUB_MIRROR=o4toi9ub980mfcs3ru.xuanyuan.run
+#
+# The image names below are the ones published by this repository:
+#
+#   karakeep          -> the app itself (web + workers)
+#   karakeep-chrome   -> the browser used for crawling, published upstream
+#
+# Everything else (volumes, env vars, service wiring) is identical to
+# docker-compose.yml.
+
+services:
+  web:
+    image: ${GHCR_MIRROR:-o4toi9ub980mfcs3ru-ghcr.xuanyuan.run}/textworld/karakeep:${KARAKEEP_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      # By default, the data is stored in a docker volume called "data".
+      # If you want to mount a custom directory, change the volume mapping to:
+      # - /path/to/your/directory:/data
+      - data:/data
+    ports:
+      - 3000:3000
+    env_file:
+      - .env
+    environment:
+      MEILI_ADDR: http://meilisearch:7700
+      BROWSER_WEB_URL: http://chrome:9222
+      # OPENAI_API_KEY: ...
+
+      # The API key of the site content API (e.g. TikHub), used to fetch the
+      # content of sites that can't be crawled directly. See the config
+      # documentation for more info.
+      TIKHUB_API_KEY: ${TIKHUB_API_KEY:-}
+
+      # You almost never want to change the value of the DATA_DIR variable.
+      # If you want to mount a custom directory, change the volume mapping above instead.
+      DATA_DIR: /data # DON'T CHANGE THIS
+  chrome:
+    image: ${GHCR_MIRROR:-o4toi9ub980mfcs3ru-ghcr.xuanyuan.run}/karakeep-app/karakeep-chrome:release
+    restart: unless-stopped
+    init: true
+    command:
+      - --disable-gpu
+      - --disable-dev-shm-usage
+      - --hide-scrollbars
+      - --disable-blink-features=AutomationControlled
+      - --window-size=1440,900
+  meilisearch:
+    image: ${DOCKERHUB_MIRROR:-o4toi9ub980mfcs3ru.xuanyuan.run}/getmeili/meilisearch:v1.55.0
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch:/meili_data
+
+volumes:
+  meilisearch:
+  data:

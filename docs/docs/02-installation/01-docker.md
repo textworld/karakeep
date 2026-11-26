@@ -85,6 +85,23 @@ Check the [configuration docs](../03-configuration/01-environment-variables.md) 
 
 Go to the [quick sharing page](../04-using-karakeep/quick-sharing.md) to install the mobile apps and the browser extensions. Those will help you hoard things faster!
 
+### [Optional] 8. Pull the images through a registry mirror
+
+If the registries are slow or unreachable from your network (e.g. mainland China), you can pull the images through a mirror instead. Download the mirror compose file:
+
+```
+wget https://raw.githubusercontent.com/textworld/karakeep/main/docker/docker-compose.proxy.yml
+```
+
+It differs from the regular compose file only in the image names: the app and the Chrome image are pulled from a mirror of ghcr.io, and Meilisearch from a mirror of Docker Hub. The mirrors are configured through two variables, so you can point them somewhere else in your `.env` file:
+
+```
+GHCR_MIRROR=o4toi9ub980mfcs3ru-ghcr.xuanyuan.run
+DOCKERHUB_MIRROR=o4toi9ub980mfcs3ru.xuanyuan.run
+```
+
+Everything else (volumes, env vars, service wiring) is identical, so the rest of this guide applies unchanged.
+
 ## Updating
 
 Updating Karakeep will depend on what you used for the `KARAKEEP_VERSION` env variable.
