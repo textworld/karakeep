@@ -182,6 +182,21 @@ describe("ZhihuSiteHandler", () => {
     expect(get).toHaveBeenCalledTimes(1);
   });
 
+  // Zhihu answers a deleted piece of content with a 200 and an empty payload.
+  // That has to surface as a failure rather than as an empty bookmark.
+  it("fails when the content is empty", async () => {
+    const get = vi.fn(async () => ({ id: "1", title: null, content: "" }));
+    const handler = new ZhihuSiteHandler({ get } as unknown as TikHubClient, 0);
+
+    await expect(
+      handler.fetch({
+        ...ctx,
+        url: "https://zhuanlan.zhihu.com/p/669214677",
+      } as CrawlContext),
+    ).rejects.toThrow("no content");
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it("fetches a column article", async () => {
     const get = vi.fn(async () => ({
       id: "669214677",

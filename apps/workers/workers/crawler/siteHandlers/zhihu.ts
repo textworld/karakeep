@@ -215,14 +215,26 @@ export class ZhihuSiteHandler implements SiteHandler {
     if (!target) {
       throw new Error(`Not a Zhihu URL that can be fetched: ${ctx.url}`);
     }
-    switch (target.type) {
-      case "article":
-        return await this.fetchArticle(target.articleId, ctx);
-      case "answer":
-        return await this.fetchAnswer(target.answerId, ctx);
-      case "question":
-        return await this.fetchQuestion(target.questionId, ctx);
+    const page = await (async () => {
+      switch (target.type) {
+        case "article":
+          return await this.fetchArticle(target.articleId, ctx);
+        case "answer":
+          return await this.fetchAnswer(target.answerId, ctx);
+        case "question":
+          return await this.fetchQuestion(target.questionId, ctx);
+      }
+    })();
+    // Zhihu answers a deleted piece of content with a 200 and an empty
+    // payload. Without this check the bookmark would end up marked as
+    // successfully crawled with nothing in it. A page that still carries a
+    // title is kept: it identifies the bookmark even when the body is gone.
+    if (!page.content.trim() && !page.metadata.title) {
+      throw new Error(
+        `Zhihu returned no content for the ${target.type} ${JSON.stringify(target)} (it may have been deleted)`,
+      );
     }
+    return page;
   }
 
   private async fetchArticle(
