@@ -345,6 +345,19 @@ const allEnv = z.object({
     )
     .optional(),
 
+  // Site-specific content APIs. Used to fetch the content of sites that
+  // can't be crawled directly (e.g. Zhihu, which requires a login).
+  TIKHUB_API_KEY: z.string().optional(),
+  TIKHUB_BASE_URL: z.string().url().default("https://api.tikhub.io"),
+  TIKHUB_TIMEOUT_SEC: z.coerce.number().default(30),
+  // How many answers to pull in when a Zhihu question is bookmarked.
+  TIKHUB_QUESTION_ANSWERS_LIMIT: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(20)
+    .default(5),
+
   // Database configuration
   DB_WAL_MODE: stringBool("false"),
 
@@ -572,6 +585,12 @@ const serverConfigSchema = allEnv.transform((val, ctx) => {
       httpProxy: val.CRAWLER_HTTP_PROXY,
       httpsProxy: val.CRAWLER_HTTPS_PROXY,
       noProxy: val.CRAWLER_NO_PROXY,
+    },
+    tikhub: {
+      apiKey: val.TIKHUB_API_KEY,
+      baseUrl: val.TIKHUB_BASE_URL,
+      timeoutSec: val.TIKHUB_TIMEOUT_SEC,
+      questionAnswersLimit: val.TIKHUB_QUESTION_ANSWERS_LIMIT,
     },
     allowedInternalHostnames: val.CRAWLER_ALLOWED_INTERNAL_HOSTNAMES,
     assetPreprocessing: {

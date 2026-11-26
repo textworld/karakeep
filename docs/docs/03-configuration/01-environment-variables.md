@@ -200,6 +200,19 @@ Example JSON file:
 
 </details>
 
+## Site-specific Content APIs
+
+Some sites don't serve their content to logged-out crawlers (e.g. Zhihu (知乎) redirects to a login wall), which makes them impossible to bookmark with the regular crawler. For those, Karakeep can fetch the content through a third-party API instead. Currently, [TikHub](https://docs.tikhub.io/) is supported for Zhihu links (questions, answers and column articles).
+
+The integration is disabled unless an API key is configured. When it's enabled, Zhihu links are fetched through TikHub and the browser is never launched for them, which means no screenshot is captured for those bookmarks. If the API call fails, Karakeep falls back to the regular browser crawl.
+
+| Name                            | Required | Default                    | Description                                                                                                                                                                                             |
+| ------------------------------- | -------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TIKHUB_API_KEY                  | No       | Not set                    | The API key used to authenticate against TikHub. Get one from the [TikHub dashboard](https://user.tikhub.io/dashboard/api). When not set, the integration is disabled.                             |
+| TIKHUB_BASE_URL                 | No       | `https://api.tikhub.io`    | The base URL of the TikHub API. Only change it if you use a private mirror.                                                                                                                           |
+| TIKHUB_TIMEOUT_SEC              | No       | 30                         | How long to wait for a TikHub API request to finish before timing out.                                                                                                                                  |
+| TIKHUB_QUESTION_ANSWERS_LIMIT   | No       | 5                          | How many answers to pull in when a Zhihu question is bookmarked. Set it to `0` to only store the question itself.                                                                                     |
+
 ## OCR Configs
 
 Karakeep uses [tesseract.js](https://github.com/naptha/tesseract.js) to extract text from images by default. Alternatively, you can use an LLM-based OCR by enabling the `OCR_USE_LLM` flag. LLM-based OCR uses the configured inference model (OpenAI or Ollama) to extract text from images, which can provide better results for complex images but requires a configured inference provider.

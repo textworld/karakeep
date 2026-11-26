@@ -72,11 +72,19 @@ import { tryCatch } from "@karakeep/shared/tryCatch";
 import { BookmarkTypes } from "@karakeep/shared/types/bookmarks";
 import { WebhooksService } from "@karakeep/trpc/models/webhooks.service";
 
-import type { CrawlContext, Crawler, UrlProbeResult } from "./crawler/common";
+import type {
+  CrawlContext,
+  Crawler,
+  FetchedPage,
+  UrlProbeResult,
+} from "./crawler/common";
 import type { ParseSubprocessOutput } from "./utils/parseHtmlSubprocessIpc";
 import { CAPTURED_ASSETS, crawlLogger, span, traced } from "./crawler/common";
 import { localCrawler } from "./crawler/localCrawler";
 import { remoteCrawler } from "./crawler/remoteCrawler";
+import { getSiteHandler } from "./crawler/siteHandlers";
+import type { SiteApiPage } from "./crawler/siteHandlers/types";
+import { escapeHtml } from "./crawler/siteHandlers/utils";
 import {
   bookmarkCrawlLatencyHistogram,
   crawlerStatusCodeCounter,
@@ -98,6 +106,7 @@ import {
   isLikelyChallengePage,
   resolveMetadata,
 } from "./utils/metadataResolver";
+import { runParseSubprocess } from "./utils/parseSubprocess";
 
 const crawler: Crawler = serverConfig.sandbox.url
   ? remoteCrawler
@@ -347,8 +356,17 @@ async function runCrawler(
   // it — reload it from the bookmark row instead.
   const reuseStoredProbeMetadata =
     job.runNumber > 0 && probeMetadataAt !== null;
+
+  // Some sites (e.g. Zhihu) don't serve their content to logged-out
+  // crawlers, so their content is fetched through a third-party API instead.
+  // This runs before the content-type probe, as the probe has to reach the
+  // site itself.
+  const siteApiPage = precrawledArchiveAssetId
+    ? null
+    : await fetchViaSiteApi(ctx);
+
   const { contentType, metadata: probeMetadata }: UrlProbeResult =
-    precrawledArchiveAssetId
+    precrawledArchiveAssetId || siteApiPage
       ? { contentType: ASSET_TYPES.TEXT_HTML, metadata: Promise.resolve(null) }
       : await crawler.getContentTypeAndMetadata(ctx, {
           skipMetadataExtraction: reuseStoredProbeMetadata,
@@ -377,17 +395,21 @@ async function runCrawler(
     // fill-only (see writeProbeMetadata). On retry runs where the probe
     // metadata was already stored, reload it from the bookmark row instead.
     // Never rejects.
-    const probeMetadataPromise = reuseStoredProbeMetadata
-      ? loadStoredProbeMetadata(ctx)
-      : probeMetadata.then(async (metadata) => {
-          if (metadata) {
-            const { error } = await tryCatch(writeProbeMetadata(ctx, metadata));
-            if (error) {
-              log.warn(`Failed to write early probe metadata: ${error}`);
+    const probeMetadataPromise = siteApiPage
+      ? Promise.resolve(null)
+      : reuseStoredProbeMetadata
+        ? loadStoredProbeMetadata(ctx)
+        : probeMetadata.then(async (metadata) => {
+            if (metadata) {
+              const { error } = await tryCatch(
+                writeProbeMetadata(ctx, metadata),
+              );
+              if (error) {
+                log.warn(`Failed to write early probe metadata: ${error}`);
+              }
             }
-          }
-          return metadata;
-        });
+            return metadata;
+          });
     const page = await crawlAndParseUrl(ctx, {
       oldAssets: {
         screenshotAssetId: oldScreenshotAssetId,
@@ -399,6 +421,7 @@ async function runCrawler(
       forceStorePdf: storePdf ?? false,
       numRetriesLeft,
       probeMetadataPromise,
+      prefetchedPage: siteApiPage,
     });
 
     await enqueuePostCrawlJobs(ctx, job);
@@ -648,6 +671,108 @@ const handleAsAssetBookmark = traced(
 // 2b. The URL is a webpage
 // ---------------------------------------------------------------------------
 
+/**
+ * Builds a minimal HTML document around the content and metadata fetched
+ * from a site-specific API. The document is handed to the parse subprocess,
+ * which extracts (and sanitizes) the readable content out of it, exactly
+ * like it does for a page fetched with the browser.
+ */
+function buildSyntheticHtml(page: SiteApiPage): string {
+  const title = page.metadata.title ?? "";
+  const description = page.metadata.description ?? "";
+  return [
+    "<!DOCTYPE html>",
+    '<html lang="zh">',
+    "<head>",
+    '<meta charset="utf-8">',
+    `<title>${escapeHtml(title)}</title>`,
+    description
+      ? `<meta name="description" content="${escapeHtml(description)}">`
+      : "",
+    "</head>",
+    "<body>",
+    "<article>",
+    page.content,
+    "</article>",
+    "</body>",
+    "</html>",
+  ].join("\n");
+}
+
+/**
+ * Merges the metadata extracted from the synthetic document with the one the
+ * API returned. The API's values win, but only when it actually returned
+ * one: an empty value must not wipe out what the extractor found.
+ */
+function mergeMetadata(
+  extracted: ParseSubprocessOutput["metadata"],
+  fromApi: ParseSubprocessOutput["metadata"],
+): ParseSubprocessOutput["metadata"] {
+  const merged: Record<string, unknown> = { ...extracted };
+  for (const [key, value] of Object.entries(fromApi)) {
+    if (value !== null && value !== undefined && value !== "") {
+      merged[key] = value;
+    }
+  }
+  return merged as ParseSubprocessOutput["metadata"];
+}
+
+/**
+ * Fetches the page's content through a site-specific API (e.g. TikHub for
+ * Zhihu) instead of crawling it with the browser.
+ *
+ * Returns null when no handler applies to the URL, or when the API call
+ * fails: the caller then falls back to the regular crawl, so a broken (or
+ * unconfigured) integration never fails a crawl on its own.
+ */
+const fetchViaSiteApi = traced(
+  "fetchViaSiteApi",
+  async (ctx: CrawlContext): Promise<FetchedPage | null> => {
+    const handler = getSiteHandler(ctx.url);
+    if (!handler) {
+      return null;
+    }
+    const { log } = ctx;
+    log.info(
+      `Fetching the content of "${truncateUrl(ctx.url)}" through the ${handler.name} API ...`,
+    );
+    try {
+      const page = await handler.fetch(ctx);
+      ctx.abortSignal.throwIfAborted();
+      const htmlContent = buildSyntheticHtml(page);
+      const parsed = await runParseSubprocess(
+        htmlContent,
+        ctx.url,
+        ctx.jobId,
+        ctx.abortSignal,
+        ctx.runProxy,
+      );
+      ctx.abortSignal.throwIfAborted();
+      log.info(
+        `Fetched the content of the url through the ${handler.name} API.`,
+      );
+      return {
+        htmlContent,
+        // There's no rendered page, so there's nothing to capture.
+        screenshot: undefined,
+        pdf: undefined,
+        statusCode: 200,
+        url: ctx.url,
+        parsed: {
+          ...parsed,
+          metadata: mergeMetadata(parsed.metadata, page.metadata),
+        },
+      };
+    } catch (e) {
+      ctx.abortSignal.throwIfAborted();
+      log.warn(
+        `Failed to fetch the content through the ${handler.name} API: ${e}. Falling back to the regular crawl.`,
+      );
+      return null;
+    }
+  },
+);
+
 type DBAssetType = typeof assets.$inferInsert;
 
 interface CrawlAndParseUrlArgs {
@@ -662,6 +787,11 @@ interface CrawlAndParseUrlArgs {
   forceStorePdf: boolean;
   numRetriesLeft: number;
   probeMetadataPromise: Promise<ParseSubprocessOutput["metadata"] | null>;
+  /**
+   * A page that was already fetched (through a site-specific API), used
+   * instead of crawling the URL with the browser.
+   */
+  prefetchedPage?: FetchedPage | null;
 }
 
 /**
@@ -682,6 +812,7 @@ const crawlAndParseUrl = traced(
       forceStorePdf,
       numRetriesLeft,
       probeMetadataPromise,
+      prefetchedPage,
     } = args;
     const sanitizedProxyUrl = redactUrlCredentials(
       runProxy.httpsProxy ?? runProxy.httpProxy ?? "",
@@ -690,6 +821,7 @@ const crawlAndParseUrl = traced(
     setSpanAttributes({
       "crawler.forceStorePdf": forceStorePdf,
       "crawler.hasPrecrawledArchive": !!precrawledArchiveAssetId,
+      "crawler.hasPrefetchedPage": !!prefetchedPage,
     });
     let precrawledHtml: string | undefined;
     if (precrawledArchiveAssetId) {
@@ -702,11 +834,13 @@ const crawlAndParseUrl = traced(
       });
       precrawledHtml = asset.asset.toString();
     }
-    const result = await crawler.fetchPage(ctx, {
-      forceStorePdf,
-      precrawledHtml,
-      skipParseOnRetryableStatus: numRetriesLeft > 0,
-    });
+    const result =
+      prefetchedPage ??
+      (await crawler.fetchPage(ctx, {
+        forceStorePdf,
+        precrawledHtml,
+        skipParseOnRetryableStatus: numRetriesLeft > 0,
+      }));
     abortSignal.throwIfAborted();
 
     const {

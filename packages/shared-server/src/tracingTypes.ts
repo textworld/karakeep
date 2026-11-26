@@ -29,6 +29,7 @@ export type TracingAttributeKey =
   | "crawler.skipScreenshot"
   | "crawler.skipPdf"
   | "crawler.hasPrecrawledArchive"
+  | "crawler.hasPrefetchedPage"
   | "crawler.getContentType.statusCode"
   | "crawler.contentType"
   | "crawler.statusCode"
